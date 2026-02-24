@@ -55,8 +55,12 @@ pub fn main(init: std.process.Init) !void {
     // std.debug.print("Stew{any}", .{stew});
     // defer allocator.destry(stew);
 
-    const profile = try stew.run(init.io, allocator);
-    _ = profile;
+    var profile: Profile = undefined;
+    if (try stew.run(init.io, allocator)) |pf| {
+        profile = pf;
+    } else return;
+    profile.print();
+    defer allocator.free(profile._path);
 
     // std.debug.print("{any}", .{profile});
 
@@ -141,8 +145,6 @@ const Stew = struct {
         std.debug.print("{s}{s}\n", .{ " --json, -J       prints the env data as json", clear });
     }
 
-    fn profile() Profile {}
-
     fn env(allocator: std.mem.Allocator, io: std.Io, verbose: bool) !Profile {
         _ = verbose;
 
@@ -159,7 +161,6 @@ const Stew = struct {
         var path = try allocator.alloc(u8, 64);
         const n = try repo.realPathFile(io, ".", path);
         path = try allocator.realloc(path, n);
-        defer allocator.free(path);
         const name = std.fs.path.basename(path);
 
         // language
@@ -172,6 +173,7 @@ const Stew = struct {
                 }
             }
         }
+        if (lang == null) return err.UnrecognizableEnvironment;
 
         // toolchain
         var toolchain: ?Toolchain = null;
@@ -184,11 +186,9 @@ const Stew = struct {
                 toolchain = tc;
             }
         }
-        std.debug.print("name -> {s}\n{s}{s}", .{ name, Language.as_str(lang), Toolchain.as_str(toolchain) });
+        if (toolchain == null) return err.UnrecognizableEnvironment;
 
-        if (lang == null) return err.UnrecognizableEnvironment;
-
-        return Profile{ .name = name, .lang = lang.?, .toolchain = toolchain.? };
+        return Profile{ ._path = path, .name = name, .lang = lang.?, .toolchain = toolchain.? };
     }
 
     fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?Profile {
@@ -204,7 +204,18 @@ const Stew = struct {
     }
 };
 
-const Profile = struct { name: []const u8, lang: Language, toolchain: Toolchain };
+const Profile = struct {
+    _path: []const u8,
+    name: []const u8,
+    lang: Language,
+    toolchain: Toolchain,
+
+    fn print(self: Profile) void {
+        std.debug.print("package -> {s}\n", .{self.name});
+        std.debug.print("{s}\n", .{self.lang.as_str()});
+        std.debug.print("{s}\n", .{self.toolchain.as_str()});
+    }
+};
 
 const orange_bold = "\x1b[1;38;2;213;123;76m";
 const light_green = "\x1b[35m";
@@ -253,15 +264,15 @@ const Language = enum {
     Idris,
     Ts,
 
-    fn as_str(elf: ?Language) []const u8 {
-        if (elf == null) return "language -> ???\n";
+    fn as_str(lang: Language) []const u8 {
+        // if (elf == null) return "language -> ???";
 
-        return switch (elf.?) {
-            .Zig => "language -> zig\n",
-            .Rust => "language -> rust\n",
-            .Gleam => "language -> gleam\n",
-            .Idris => "language -> idris\n",
-            .Ts => "language -> typescript\n",
+        return switch (lang) {
+            .Zig => "language -> zig",
+            .Rust => "language -> rust",
+            .Gleam => "language -> gleam",
+            .Idris => "language -> idris",
+            .Ts => "language -> typescript",
         };
     }
 };
@@ -276,18 +287,18 @@ const Toolchain = enum {
     Yarn,
     Bun,
 
-    fn as_str(elf: ?Toolchain) []const u8 {
-        if (elf == null) return "toolchain -> ???\n";
+    fn as_str(self: Toolchain) []const u8 {
+        // if (elf == null) return "toolchain -> ???";
 
-        return switch (elf.?) {
-            .Cargo => "toolchain -> cargo\n",
-            .Zig => "toolchain -> zig\n",
-            .Npm => "toolchain -> npm\n",
-            .Pnpm => "toolchain -> pnpm\n",
-            .Yarn => "toolchain -> yarn\n",
-            .Bun => "toolchain -> bun\n",
-            .Gleam => "toolchain -> gleam\n",
-            .Pack2 => "toolchain -> pack2\n",
+        return switch (self) {
+            .Cargo => "toolchain -> cargo",
+            .Zig => "toolchain -> zig",
+            .Npm => "toolchain -> npm",
+            .Pnpm => "toolchain -> pnpm",
+            .Yarn => "toolchain -> yarn",
+            .Bun => "toolchain -> bun",
+            .Gleam => "toolchain -> gleam",
+            .Pack2 => "toolchain -> pack2",
         };
     }
 };

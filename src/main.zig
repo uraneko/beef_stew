@@ -1,13 +1,16 @@
 const std = @import("std");
 const Io = std.Io;
 
-// const beef_stew = @import("beef_stew");
+const beef_stew = @import("beef_stew");
+const err = beef_stew.Error;
 
 pub fn main(init: std.process.Init) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
-    //
+
+    try beef_stew.setup_environment(init.io, init.environ_map, allocator);
+
     // var buffer: ?[][]u8 = null;
     // const size = 6;
     // for (0..size) |idx| {
@@ -55,22 +58,21 @@ pub fn main(init: std.process.Init) !void {
     // std.debug.print("Stew{any}", .{stew});
     // defer allocator.destry(stew);
 
-    var profile: Profile = undefined;
-    if (try stew.run(init.io, allocator)) |pf| {
-        profile = pf;
+    var envr: RepoEnv = undefined;
+    if (try stew.run(init.io, allocator)) |env| {
+        envr = env;
     } else return;
-    profile.print();
-    defer allocator.free(profile._path);
+    defer allocator.free(envr._path);
 
-    // std.debug.print("{any}", .{profile});
+    envr.print();
+
+    // std.debug.print("{any}", .{env});
 
     // _ = args.next();
     // if (args.next()) |arg| {
     //     std.debug.print("{s}", .{arg});
     // }
 }
-
-const err = error{ FailedToReadRepoName, ArgsAreEmpty, UnrecognizableEnvironment };
 
 fn parse_args(args: *std.process.Args.Iterator, allocator: std.mem.Allocator) !?[][:0]const u8 {
     var meat: ?[][:0]const u8 = null;
@@ -136,8 +138,10 @@ const Stew = struct {
             light_green,
             "  help, h         print this help message",
         });
-        std.debug.print("{s}\n", .{"  env, e          prints out the env data: `Lang - Package Manager`,"});
+        std.debug.print("{s}\n", .{"  env, e          prints out the env data { package name, language, toolchain },"});
         std.debug.print("{s}\n", .{"                      if the cwd is a programming repo"});
+        std.debug.print("{s}\n", .{"  init, i         initializes a new README.md file in the current dir,"});
+        std.debug.print("{s}\n", .{"                      does nothing if the file already exists"});
         std.debug.print("{s}{s}Flags:{s}\n", .{ clear, orange_bold, clear });
         std.debug.print("{s}{s}\n", .{ light_green, " --verbose, -V    prints the full env data, including" });
         std.debug.print("{s}\n", .{"                      the language compiler & package manager versions,"});
@@ -145,7 +149,7 @@ const Stew = struct {
         std.debug.print("{s}{s}\n", .{ " --json, -J       prints the env data as json", clear });
     }
 
-    fn env(allocator: std.mem.Allocator, io: std.Io, verbose: bool) !Profile {
+    fn env(allocator: std.mem.Allocator, io: std.Io, verbose: bool) !RepoEnv {
         _ = verbose;
 
         const repo = std.Io.Dir.cwd();
@@ -180,18 +184,27 @@ const Stew = struct {
         const iterable_repo = try repo.openDir(io, ".", .{ .iterate = true });
         defer iterable_repo.close(io);
 
+        var contains_readme = false;
         iter = iterable_repo.iterate();
         while (try iter.next(io)) |file| {
-            if (toolchain_checks.get(file.name)) |tc| {
+            if (std.mem.eql(u8, file.name, "README.md")) {
+                contains_readme = true;
+            } else if (toolchain_checks.get(file.name)) |tc| {
                 toolchain = tc;
             }
         }
         if (toolchain == null) return err.UnrecognizableEnvironment;
 
-        return Profile{ ._path = path, .name = name, .lang = lang.?, .toolchain = toolchain.? };
+        return RepoEnv{ .contains_readme = contains_readme, ._path = path, .name = name, .lang = lang.?, .toolchain = toolchain.? };
     }
 
-    fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?Profile {
+    /// creates a new README.md file in the current repo
+    /// from the language template in the main database
+    fn init(envr: *const RepoEnv) void {
+        if (envr.contains_readme) return;
+    }
+
+    fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?RepoEnv {
         if (self.help_) {
             Stew.help();
         }
@@ -204,16 +217,18 @@ const Stew = struct {
     }
 };
 
-const Profile = struct {
+const RepoEnv = struct {
     _path: []const u8,
+    contains_readme: bool,
     name: []const u8,
     lang: Language,
     toolchain: Toolchain,
 
-    fn print(self: Profile) void {
-        std.debug.print("package -> {s}\n", .{self.name});
-        std.debug.print("{s}\n", .{self.lang.as_str()});
-        std.debug.print("{s}\n", .{self.toolchain.as_str()});
+    fn print(self: *const RepoEnv) void {
+        std.debug.print("package   -> {s}\n", .{self.name});
+        std.debug.print("language  -> {s}\n", .{self.lang.as_str()});
+        std.debug.print("toolchain -> {s}\n", .{self.toolchain.as_str()});
+        std.debug.print("readme?   -> {any}\n", .{self.contains_readme});
     }
 };
 
@@ -265,14 +280,14 @@ const Language = enum {
     Ts,
 
     fn as_str(lang: Language) []const u8 {
-        // if (elf == null) return "language -> ???";
+        // if (elf == null) return "???";
 
         return switch (lang) {
-            .Zig => "language -> zig",
-            .Rust => "language -> rust",
-            .Gleam => "language -> gleam",
-            .Idris => "language -> idris",
-            .Ts => "language -> typescript",
+            .Zig => "zig",
+            .Rust => "rust",
+            .Gleam => "gleam",
+            .Idris => "idris",
+            .Ts => "typescript",
         };
     }
 };
@@ -288,17 +303,17 @@ const Toolchain = enum {
     Bun,
 
     fn as_str(self: Toolchain) []const u8 {
-        // if (elf == null) return "toolchain -> ???";
+        // if (elf == null) return "???";
 
         return switch (self) {
-            .Cargo => "toolchain -> cargo",
-            .Zig => "toolchain -> zig",
-            .Npm => "toolchain -> npm",
-            .Pnpm => "toolchain -> pnpm",
-            .Yarn => "toolchain -> yarn",
-            .Bun => "toolchain -> bun",
-            .Gleam => "toolchain -> gleam",
-            .Pack2 => "toolchain -> pack2",
+            .Cargo => "cargo",
+            .Zig => "zig",
+            .Npm => "npm",
+            .Pnpm => "pnpm",
+            .Yarn => "yarn",
+            .Bun => "bun",
+            .Gleam => "gleam",
+            .Pack2 => "pack2",
         };
     }
 };

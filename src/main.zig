@@ -1,7 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 
-const beef_stew = @import("beef_stew");
+// const beef_stew = @import("beef_stew");
 
 pub fn main(init: std.process.Init) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -40,6 +40,7 @@ pub fn main(init: std.process.Init) !void {
     var args = std.process.Args.iterate(init.minimal.args);
     defer args.deinit();
 
+    // std.debug.print(">>> {c}\n", .{std.Io.Dir.path.delimiter});
     const parsed = try parse_args(&args, allocator);
 
     if (parsed == null) {
@@ -50,11 +51,14 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(parsed.?);
 
     // std.debug.print("{any}", .{chunks});
-    const stew = try Stew.parse(parsed.?);
+    const stew = try Stew.from_args(parsed.?);
     // std.debug.print("Stew{any}", .{stew});
     // defer allocator.destry(stew);
 
-    try stew.run(init.io);
+    const profile = try stew.run(init.io, allocator);
+    _ = profile;
+
+    // std.debug.print("{any}", .{profile});
 
     // _ = args.next();
     // if (args.next()) |arg| {
@@ -62,10 +66,11 @@ pub fn main(init: std.process.Init) !void {
     // }
 }
 
+const err = error{ FailedToReadRepoName, ArgsAreEmpty, UnrecognizableEnvironment };
+
 fn parse_args(args: *std.process.Args.Iterator, allocator: std.mem.Allocator) !?[][:0]const u8 {
     var meat: ?[][:0]const u8 = null;
 
-    _ = args.next();
     while (args.next()) |arg| {
         if (meat == null) {
             meat = try allocator.alloc([:0]const u8, 1);
@@ -97,7 +102,7 @@ const Stew = struct {
     help_: bool = false,
     env_: bool = false,
 
-    fn parse(args: ?[][:0]const u8) !Stew {
+    fn from_args(args: ?[][:0]const u8) !Stew {
         var stew = Stew{};
         if (args) |chunks| {
             for (chunks) |chunk| {
@@ -120,18 +125,45 @@ const Stew = struct {
         // try std.Io.File.enableAnsiEscapeCodes(stdout, io);
         // try stdout.writeStreamingAll(io, help_msg);
         // try stdout.writeStreamingAll(io, "\x1b[1;38;2;213;123;76mthis text is styled and that is all\x1b[0m");
-        std.debug.print("\x1b[3;35mREADME.md editor/manager\x1b[0m\n{s}{s}{s}\n{s}Commands:{s}\n{s}{s}\n{s}\n{s}\n{s}{s}Flags:{s}\n{s}{s}\n{s}\n{s}\n{s}{s}\n", .{ orange_bold, "Usage: stew [Command] [Flags]", clear, orange_bold, clear, light_green, "  help, h         print this help message", "  env, e          prints out the env data: `Lang - Package Manager`,", "                      if the cwd is a programming repo", clear, orange_bold, clear, light_green, " --verbose, -V    prints the full env data, including", "                      the language compiler & package manager versions,", "                      as well as the type of the program: `binary | library`", " --json, -J       prints the env data as json", clear });
+        std.debug.print("\x1b[3;35mREADME.md editor/manager\x1b[0m\n", .{});
+        std.debug.print("{s}{s}{s}\n", .{ orange_bold, "Usage: stew [Command] [Flags]", clear });
+        std.debug.print("{s}Commands:{s}\n", .{ orange_bold, clear });
+        std.debug.print("{s}{s}\n", .{
+            light_green,
+            "  help, h         print this help message",
+        });
+        std.debug.print("{s}\n", .{"  env, e          prints out the env data: `Lang - Package Manager`,"});
+        std.debug.print("{s}\n", .{"                      if the cwd is a programming repo"});
+        std.debug.print("{s}{s}Flags:{s}\n", .{ clear, orange_bold, clear });
+        std.debug.print("{s}{s}\n", .{ light_green, " --verbose, -V    prints the full env data, including" });
+        std.debug.print("{s}\n", .{"                      the language compiler & package manager versions,"});
+        std.debug.print("{s}\n", .{"                      as well as the type of the program: `binary | library`"});
+        std.debug.print("{s}{s}\n", .{ " --json, -J       prints the env data as json", clear });
     }
 
-    fn env(io: std.Io, verbose: bool) !void {
+    fn profile() Profile {}
+
+    fn env(allocator: std.mem.Allocator, io: std.Io, verbose: bool) !Profile {
         _ = verbose;
 
         const repo = std.Io.Dir.cwd();
-        var lang: ?EnvLang = null;
         const src = try repo.openDir(io, "src/", .{
             .iterate = true,
         });
         defer src.close(io);
+
+        // name
+        // TODO find a way to get the dir name only
+        // since i dont actually need the path
+        // WARN this fails if path is longer than 64 bytes
+        var path = try allocator.alloc(u8, 64);
+        const n = try repo.realPathFile(io, ".", path);
+        path = try allocator.realloc(path, n);
+        defer allocator.free(path);
+        const name = std.fs.path.basename(path);
+
+        // language
+        var lang: ?Language = null;
         var iter = src.iterate();
         while (try iter.next(io)) |file| {
             for (lang_checks.keys()) |ext| {
@@ -139,42 +171,46 @@ const Stew = struct {
                     lang = lang_checks.get(ext);
                 }
             }
-
-            // std.debug.print("{s} ({any})\n", .{ file.name, file.kind });
         }
-        // package manager
-        var pacman: ?EnvPackageManager = null;
+
+        // toolchain
+        var toolchain: ?Toolchain = null;
         const iterable_repo = try repo.openDir(io, ".", .{ .iterate = true });
         defer iterable_repo.close(io);
 
         iter = iterable_repo.iterate();
         while (try iter.next(io)) |file| {
-            if (pacman_checks.get(file.name)) |package_manager| {
-                pacman = package_manager;
+            if (toolchain_checks.get(file.name)) |tc| {
+                toolchain = tc;
             }
         }
+        std.debug.print("name -> {s}\n{s}{s}", .{ name, Language.as_str(lang), Toolchain.as_str(toolchain) });
 
-        std.debug.print("{s}{s}", .{ EnvLang.as_str(lang), EnvPackageManager.as_str(pacman) });
+        if (lang == null) return err.UnrecognizableEnvironment;
+
+        return Profile{ .name = name, .lang = lang.?, .toolchain = toolchain.? };
     }
 
-    fn run(self: Stew, io: std.Io) !void {
+    fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?Profile {
         if (self.help_) {
             Stew.help();
-
-            return;
         }
 
         if (self.env_) {
-            try Stew.env(io, false);
+            return try Stew.env(allocator, io, false);
         }
+
+        return null;
     }
 };
+
+const Profile = struct { name: []const u8, lang: Language, toolchain: Toolchain };
 
 const orange_bold = "\x1b[1;38;2;213;123;76m";
 const light_green = "\x1b[35m";
 const clear = "\x1b[0m";
 
-const lang_checks = std.StaticStringMap(EnvLang).initComptime(.{
+const lang_checks = std.StaticStringMap(Language).initComptime(.{
     .{ ".rs", .Rust },
     .{ ".zig", .Zig },
     .{ ".idr", .Idris },
@@ -183,7 +219,7 @@ const lang_checks = std.StaticStringMap(EnvLang).initComptime(.{
     .{ "tsx", .Ts },
 });
 
-const pacman_checks = std.StaticStringMap(EnvPackageManager).initComptime(.{
+const toolchain_checks = std.StaticStringMap(Toolchain).initComptime(.{
     .{ "package.json", .Npm },
     .{ "pnpm-lock.yaml", .Pnpm },
     .{ "yarn.lock", .Yarn },
@@ -205,19 +241,19 @@ const help_msg =
     \\
     \\ Flags: 
     \\ --verbose, -V    prints the full env data, including 
-    \\                      the language compiler & package manager versions, 
+    \\                      the language compiler & toolchain versions, 
     \\                      as well as the type of the program: `binary | library`
     \\ --json, -J       prints the env data as json 
 ;
 
-const EnvLang = enum {
+const Language = enum {
     Rust,
     Zig,
     Gleam,
     Idris,
     Ts,
 
-    fn as_str(elf: ?EnvLang) []const u8 {
+    fn as_str(elf: ?Language) []const u8 {
         if (elf == null) return "language -> ???\n";
 
         return switch (elf.?) {
@@ -230,7 +266,7 @@ const EnvLang = enum {
     }
 };
 
-const EnvPackageManager = enum {
+const Toolchain = enum {
     Cargo,
     Zig,
     Gleam,
@@ -240,18 +276,18 @@ const EnvPackageManager = enum {
     Yarn,
     Bun,
 
-    fn as_str(elf: ?EnvPackageManager) []const u8 {
-        if (elf == null) return "???";
+    fn as_str(elf: ?Toolchain) []const u8 {
+        if (elf == null) return "toolchain -> ???\n";
 
         return switch (elf.?) {
-            .Cargo => "package-manager -> cargo\n",
-            .Zig => "package-manager -> zig\n",
-            .Npm => "package-manager -> npm\n",
-            .Pnpm => "package-manager -> pnpm\n",
-            .Yarn => "package-manager -> yarn\n",
-            .Bun => "package-manager -> bun\n",
-            .Gleam => "package-manager -> gleam\n",
-            .Pack2 => "package-manager -> pack2\n",
+            .Cargo => "toolchain -> cargo\n",
+            .Zig => "toolchain -> zig\n",
+            .Npm => "toolchain -> npm\n",
+            .Pnpm => "toolchain -> pnpm\n",
+            .Yarn => "toolchain -> yarn\n",
+            .Bun => "toolchain -> bun\n",
+            .Gleam => "toolchain -> gleam\n",
+            .Pack2 => "toolchain -> pack2\n",
         };
     }
 };

@@ -1,15 +1,16 @@
 const std = @import("std");
 const Io = std.Io;
 
-const beef_stew = @import("beef_stew");
-const err = beef_stew.Error;
+const root = @import("./root.zig");
+const c = root.c;
+const err = root.Error;
 
 pub fn main(init: std.process.Init) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    try beef_stew.setup_environment(init.io, init.environ_map, allocator);
+    try root.init_env(allocator, init.io, init.environ_map);
 
     // var buffer: ?[][]u8 = null;
     // const size = 6;
@@ -58,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
     // std.debug.print("Stew{any}", .{stew});
     // defer allocator.destry(stew);
 
-    var envr: RepoEnv = undefined;
+    var envr: Envr = undefined;
     if (try stew.run(init.io, allocator)) |env| {
         envr = env;
     } else return;
@@ -149,7 +150,7 @@ const Stew = struct {
         std.debug.print("{s}{s}\n", .{ " --json, -J       prints the env data as json", clear });
     }
 
-    fn env(allocator: std.mem.Allocator, io: std.Io, verbose: bool) !RepoEnv {
+    fn env(allocator: std.mem.Allocator, io: std.Io, verbose: bool) !Envr {
         _ = verbose;
 
         const repo = std.Io.Dir.cwd();
@@ -162,9 +163,16 @@ const Stew = struct {
         // TODO find a way to get the dir name only
         // since i dont actually need the path
         // WARN this fails if path is longer than 64 bytes
-        var path = try allocator.alloc(u8, 64);
+
+        // WARN allocating less than 4096 bytes
+        // triggers this error when using path
+        //  if (out_buffer.len < posix.PATH_MAX) return error.NameTooLong;
+        // from '.../lib/std/Io/Threaded.zig:6638:46'
+        var path = try allocator.alloc(u8, 4096);
         const n = try repo.realPathFile(io, ".", path);
-        path = try allocator.realloc(path, n);
+        if (n < 64) {
+            path = try allocator.realloc(path, n);
+        }
         const name = std.fs.path.basename(path);
 
         // language
@@ -195,16 +203,16 @@ const Stew = struct {
         }
         if (toolchain == null) return err.UnrecognizableEnvironment;
 
-        return RepoEnv{ .contains_readme = contains_readme, ._path = path, .name = name, .lang = lang.?, .toolchain = toolchain.? };
+        return Envr{ .contains_readme = contains_readme, ._path = path, .name = name, .lang = lang.?, .toolchain = toolchain.? };
     }
 
     /// creates a new README.md file in the current repo
     /// from the language template in the main database
-    fn init(envr: *const RepoEnv) void {
+    fn init(envr: *const Envr) void {
         if (envr.contains_readme) return;
     }
 
-    fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?RepoEnv {
+    fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?Envr {
         if (self.help_) {
             Stew.help();
         }
@@ -217,14 +225,14 @@ const Stew = struct {
     }
 };
 
-const RepoEnv = struct {
+const Envr = struct {
     _path: []const u8,
     contains_readme: bool,
     name: []const u8,
     lang: Language,
     toolchain: Toolchain,
 
-    fn print(self: *const RepoEnv) void {
+    fn print(self: *const Envr) void {
         std.debug.print("package   -> {s}\n", .{self.name});
         std.debug.print("language  -> {s}\n", .{self.lang.as_str()});
         std.debug.print("toolchain -> {s}\n", .{self.toolchain.as_str()});
@@ -233,7 +241,7 @@ const RepoEnv = struct {
 };
 
 const orange_bold = "\x1b[1;38;2;213;123;76m";
-const light_green = "\x1b[35m";
+const light_green = "\x1b[38;2;91;102;93m";
 const clear = "\x1b[0m";
 
 const lang_checks = std.StaticStringMap(Language).initComptime(.{

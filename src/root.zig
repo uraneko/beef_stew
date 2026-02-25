@@ -2,27 +2,13 @@
 const std = @import("std");
 const Io = std.Io;
 
-/// This is a documentation comment to explain the `printAnotherMessage` function below.
-///
-/// Accepting an `Io.Writer` instance is a handy way to write reusable code.
-pub fn printAnotherMessage(writer: *Io.Writer) Io.Writer.Error!void {
-    try writer.print("Run `zig build test` to run the tests.\n", .{});
-}
-
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
-
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
-}
-
 pub const c = @cImport({
     @cInclude("sqlite3.h");
 });
+pub const sqlite = @import("./sqlite.zig");
 
-const STEW_PATH = "forge/zig/beef_stew/";
-const DATA_PATH = STEW_PATH ++ "data/main.db3";
+pub const STEW_PATH = "forge/zig/beef_stew/";
+pub const DATA_PATH = "data/main.db3";
 
 pub const Error = error{
     FailedToReadRepoName,
@@ -32,33 +18,48 @@ pub const Error = error{
     FailedToGetHomeEnvVar,
 };
 
-pub fn gen_env_map(allocator: std.mem.Allocator) !std.process.Environ.Map {
-    return std.process.Environ.Map.init(allocator);
+pub fn init_env(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    map: *std.process.Environ.Map,
+) !void {
+    const home = try get_home_env_var(map);
+
+    const path = try std.mem.concat(
+        allocator,
+        u8,
+        &[3][]const u8{ home, "/", STEW_PATH },
+    );
+    defer allocator.free(path);
+
+    try setup_data_dir(io, path);
+    const data_path = try std.mem.concat(
+        allocator,
+        u8,
+        &[3][]const u8{ path, "/", DATA_PATH },
+    );
+    defer allocator.free(data_path);
+
+    var db = try sqlite.connect(data_path);
+    db = null;
+    defer sqlite.close(db);
+}
+
+pub fn get_home_env_var(map: *std.process.Environ.Map) ![]const u8 {
+    if (map.get("HOME")) |v| {
+        return v;
+    } else {
+        return Error.FailedToGetHomeEnvVar;
+    }
 }
 
 /// sets up this program's environment if it doesn't exist
 // TODO this should be in a build step
 // should relocate it there, once i know my way around zig better
-pub fn setup_environment(
+pub fn setup_data_dir(
     io: Io,
-    env_map: *std.process.Environ.Map,
-    allocator: std.mem.Allocator,
+    path: []const u8,
 ) !void {
-    var home: []const u8 = undefined;
-
-    if (env_map.get("HOME")) |v| {
-        home = v;
-    } else {
-        return Error.FailedToGetHomeEnvVar;
-    }
-
-    const path = try std.mem.concat(allocator, u8, &[3][]const u8{
-        home,
-        "/",
-        STEW_PATH,
-    });
-    defer allocator.free(path);
-
     const dir = try std.Io.Dir.openDirAbsolute(io, path, .{
         .iterate = true,
     });
@@ -77,13 +78,4 @@ pub fn setup_environment(
     }
 }
 
-pub fn connect_to_db() !c.sqlite {
-    var db: *c.sqlite = undefined;
-    const res = c.sqlite3_open(&DATA_PATH, &db);
-
-    if (res != 0) {
-        return Error.FailedToConnectToDB;
-    }
-
-    return db;
-}
+pub fn setup_database() !void {}

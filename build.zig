@@ -39,7 +39,11 @@ pub fn build(b: *std.Build) void {
         // Later on we'll use this module as the root module of a test executable
         // which requires us to specify a target.
         .target = target,
+        .link_libc = true,
     });
+
+    const sqlite = b.createModule(.{ .root_source_file = b.path("src/sqlite.zig") });
+    mod.addImport("sqlite", sqlite);
     mod.linkSystemLibrary("sqlite3", .{});
 
     // Here we define an executable. An executable needs to have a root module

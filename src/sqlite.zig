@@ -17,18 +17,14 @@ pub fn close(db: ?*c.sqlite3) void {
     defer _ = c.sqlite3_close(db);
 }
 
-pub fn execute(db: ?*c.sqlite3, allocator: std.mem.Allocator, operation: type) !void {
-    switch (operation) {
-        CreateTable => try CreateTable.create(db, allocator),
-        _ => unreachable,
-    }
-}
-
-pub fn Operation(comptime action: []const u8) type {
-    const act = std.meta.StringToEnum(Action, action);
+pub fn execute(
+    db: ?*c.sqlite3,
+    allocator: std.mem.Allocator,
+    operation: anytype,
+) !void {
+    const act = std.meta.stringToEnum(Action, operation.action()) orelse unreachable;
     switch (act) {
-        .create => CreateTable,
-        _ => unreachable,
+        .create => try operation.create(db, allocator),
     }
 }
 
@@ -41,38 +37,55 @@ pub const CreateTable = struct {
     columns: []Column,
 
     pub fn new(name: []const u8, columns: []Column) @This() {
-        return @This(){
+        return CreateTable{
             .name = name,
             .columns = columns,
         };
     }
 
+    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.columns);
+    }
+
+    pub fn action(self: @This()) []const u8 {
+        _ = &self;
+
+        return "create";
+    }
+
     // WARN if you use this
     // you are responsible for freeing once done with the value
-    pub fn serialize(self: *const @This(), allocator: std.mem.Allocator) ![]const u8 {
-        var query = allocator.alloc(u8, 4096);
-        var idx = 0;
-        extend_bytes(&query, "create table if not exists ", &idx);
-        extend_bytes(&query, self.name, &idx);
-        extend_bytes(&query, " (", &idx);
+    pub fn statement(self: @This(), allocator: std.mem.Allocator) ![]const u8 {
+        var stt: []u8 = try allocator.alloc(u8, 4096);
+        var idx: usize = 0;
+        extend_bytes(&stt, "create table if not exists ", &idx);
+        extend_bytes(&stt, self.name, &idx);
+        extend_bytes(&stt, " (", &idx);
 
         for (self.columns) |column| {
-            try column.build(query, idx);
+            try column.dump(&stt, &idx);
+            extend_bytes(&stt, ", ", &idx);
         }
-        extend_bytes(&query, ") strict;", &idx);
+        idx -= 2;
+        extend_bytes(&stt, ") strict;", &idx);
 
-        if (query.length > idx) {
-            query = try allocator.realloc(query, idx + 1);
+        if (stt.len > idx) {
+            stt = try allocator.realloc(stt, idx);
         }
+
+        return stt;
     }
 
     pub fn create(self: @This(), db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
         var errmsg: [*c]u8 = undefined;
-        const query = try self.serialize(allocator);
-        defer allocator.free(query);
+        const stt = try self.statement(allocator);
+        defer allocator.free(stt);
 
-        if (c.SQLITE_OK != c.sqlite3_exec(db, query, null, null, &errmsg)) {
+        const c_stt: [*c]const u8 = @ptrCast(stt);
+        std.debug.print("\n\n>>>{s}<<<\n\n", .{c_stt});
+        if (c.SQLITE_OK != c.sqlite3_exec(db, c_stt, null, null, &errmsg)) {
             defer c.sqlite3_free(errmsg);
+            std.debug.print("\n*** {s}\n", .{errmsg});
 
             return Error.SqliteExecFailed;
         }
@@ -92,24 +105,49 @@ pub const Column = struct {
     unique_: bool,
     not_null_: bool,
 
-    pub fn builder() Column {
+    pub fn new(name_: []const u8, type_: []const u8) Column {
+        const type_from_str = std.meta.stringToEnum(SqliteType, type_) orelse unreachable;
         return Column{
-            .name_ = undefined,
-            .type_ = undefined,
+            .name_ = name_,
+            .type_ = type_from_str,
             .pk_ = false,
             .unique_ = false,
             .not_null_ = false,
         };
     }
 
-    pub fn name(self: Column, name_: []const u8) @This() {
+    pub fn new_pk(name_: []const u8, type_: []const u8) Column {
+        const type_from_str = std.meta.stringToEnum(SqliteType, type_) orelse unreachable;
+        return Column{
+            .name_ = name_,
+            .type_ = type_from_str,
+            .pk_ = true,
+            .unique_ = false,
+            .not_null_ = false,
+        };
+    }
+
+    pub fn with_flags(name_: []const u8, type_: []const u8, u: bool, nn: bool) Column {
+        const type_from_str = std.meta.stringToEnum(SqliteType, type_) orelse unreachable;
+        return Column{
+            .name_ = name_,
+            .type_ = type_from_str,
+            .pk_ = false,
+            .unique_ = u,
+            .not_null_ = nn,
+        };
+    }
+
+    pub fn name(self: Column, name_: []const u8) Column {
+        @compileLog(@TypeOf(self));
         self.name_ = name_;
 
         return self;
     }
 
-    pub fn ty(self: Column, type_: SqliteType) Column {
-        self.type_ = type_;
+    pub fn ty(self: Column, type_: []const u8) Column {
+        const type_from_str = std.meta.stringToEnum(SqliteType, type_) orelse unreachable;
+        self.type_ = type_from_str;
 
         return self;
     }
@@ -132,62 +170,59 @@ pub const Column = struct {
         return self;
     }
 
-    fn build(self: Column, query: *[]u8, idx: *usize) !void {
-        if (self.name_ == undefined or self.ty_ == undefined) {
+    fn dump(self: Column, stt: *[]u8, idx: *usize) !void {
+        // TODO self.type_ check
+        if (std.mem.eql(u8, self.name_, undefined)) {
             return Error.TableNameTypeCantBeUndefined;
         } else if (self.pk_ and (self.unique_ or self.not_null_)) {
             return Error.PKConstraintCantCoexistWithUnique;
         }
 
-        extend_bytes(&query, self.name_, &idx);
-        push_byte(&query, ' ', &idx);
-        extend_bytes(&query, self.type_.as_str(), &idx);
+        extend_bytes(stt, self.name_, idx);
+        push_byte(stt, ' ', idx);
+        extend_bytes(stt, self.type_.as_str(), idx);
 
         if (self.pk_) {
-            extend_bytes(&query, " primary key", &idx);
+            extend_bytes(stt, " primary key", idx);
         } else {
             if (self.unique_) {
-                extend_bytes(&query, " unique", &idx);
+                extend_bytes(stt, " unique", idx);
             }
 
             if (self.not_null_) {
-                extend_bytes(&query, " not null", &idx);
+                extend_bytes(stt, " not null", idx);
             }
         }
-
-        return query;
     }
 };
 
 fn push_byte(self: *[]u8, byte: u8, idx: *usize) void {
-    self[idx] = byte;
-    idx += 1;
+    self.*[idx.*] = byte;
+    idx.* += 1;
 }
 
-fn extend_bytes(
-    self: *[]u8,
-    bytes: []const u8,
-    idx: *usize,
-) void {
-    const len = bytes.length;
-    std.mem.copyForwards(u8, self[idx..], bytes);
-    idx += len;
+fn extend_bytes(self: *[]u8, bytes: []const u8, idx: *usize) void {
+    const len = bytes.len;
+    for (idx.*..len + idx.*, 0..len) |sidx, bidx| {
+        self.*[sidx] = bytes[bidx];
+    }
+    idx.* += len;
 }
 
 pub const SqliteType = enum {
-    Text,
-    Blob,
-    Int,
-    Real,
-    Null,
+    text,
+    blob,
+    int,
+    real,
+    null,
 
-    pub fn as_str(self: *const @This()) []const u8 {
-        switch (self) {
-            .Text => "text",
-            .Blob => "blob",
-            .Int => "integer",
-            .Real => "real",
-            .Null => "null",
-        }
+    pub fn as_str(self: SqliteType) []const u8 {
+        return switch (self) {
+            .text => "text",
+            .blob => "blob",
+            .int => "integer",
+            .real => "real",
+            .null => "null",
+        };
     }
 };

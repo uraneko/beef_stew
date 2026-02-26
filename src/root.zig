@@ -6,6 +6,8 @@ pub const c = @cImport({
     @cInclude("sqlite3.h");
 });
 pub const sqlite = @import("./sqlite.zig");
+const Column = sqlite.Column;
+const CreateTable = sqlite.CreateTable;
 
 pub const STEW_PATH = "forge/zig/beef_stew/";
 pub const DATA_PATH = "data/main.db3";
@@ -18,6 +20,13 @@ pub const Error = error{
     FailedToGetHomeEnvVar,
 };
 
+pub fn get_home_env_var(map: *std.process.Environ.Map) ![]const u8 {
+    if (map.get("HOME")) |v| {
+        return v;
+    } else {
+        return Error.FailedToGetHomeEnvVar;
+    }
+}
 pub fn init_env(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -40,17 +49,11 @@ pub fn init_env(
     );
     defer allocator.free(data_path);
 
-    var db = try sqlite.connect(data_path);
-    db = null;
+    const db = try sqlite.connect(data_path);
     defer sqlite.close(db);
-}
 
-pub fn get_home_env_var(map: *std.process.Environ.Map) ![]const u8 {
-    if (map.get("HOME")) |v| {
-        return v;
-    } else {
-        return Error.FailedToGetHomeEnvVar;
-    }
+    try setup_comps_table(db, allocator);
+    try setup_templates_table(db, allocator);
 }
 
 /// sets up this program's environment if it doesn't exist
@@ -78,4 +81,26 @@ pub fn setup_data_dir(
     }
 }
 
-pub fn setup_database() !void {}
+pub fn setup_templates_table(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
+    var columns = try allocator.alloc(Column, 3);
+    defer allocator.free(columns);
+
+    columns[0] = Column.new_pk("name", "text");
+    columns[1] = Column.with_flags("value", "text", true, true);
+    columns[2] = Column.with_flags("language", "text", false, true);
+
+    const create = CreateTable.new("templates", columns);
+    try sqlite.execute(db, allocator, create);
+}
+
+pub fn setup_comps_table(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
+    var columns = try allocator.alloc(Column, 3);
+    defer allocator.free(columns);
+
+    columns[0] = Column.new_pk("name", "text");
+    columns[1] = Column.with_flags("value", "text", true, true);
+    columns[2] = Column.with_flags("languages", "int", false, true);
+
+    const create = CreateTable.new("components", columns);
+    try sqlite.execute(db, allocator, create);
+}

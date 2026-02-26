@@ -6,3 +6,4 @@ This program is a cli tool for managing git repos README files.
 * composable markdown
 * reusable markdown
 * viewable markdown (online git platforms compatible)
+* component/template generation from existing readmes

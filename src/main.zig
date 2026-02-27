@@ -132,21 +132,37 @@ const Stew = struct {
         // try std.Io.File.enableAnsiEscapeCodes(stdout, io);
         // try stdout.writeStreamingAll(io, help_msg);
         // try stdout.writeStreamingAll(io, "\x1b[1;38;2;213;123;76mthis text is styled and that is all\x1b[0m");
-        std.debug.print("\x1b[3;35mREADME.md editor/manager\x1b[0m\n", .{});
+        std.debug.print(
+            "\x1b[3;38;2;112;114;154mreadme markdown files editor/manager\x1b[0m\n",
+            .{},
+        );
         std.debug.print("{s}{s}{s}\n", .{ orange_bold, "Usage: stew [Command] [Flags]", clear });
         std.debug.print("{s}Commands:{s}\n", .{ orange_bold, clear });
         std.debug.print("{s}{s}\n", .{
             light_green,
             "  help, h         print this help message",
         });
-        std.debug.print("{s}\n", .{"  env, e          prints out the env data { package name, language, toolchain },"});
+        std.debug.print("{s}\n", .{
+            "  env, e          prints out the env data { package name, language, toolchain },",
+        });
         std.debug.print("{s}\n", .{"                      if the cwd is a programming repo"});
-        std.debug.print("{s}\n", .{"  init, i         initializes a new README.md file in the current dir,"});
-        std.debug.print("{s}\n", .{"                      does nothing if the file already exists"});
+        std.debug.print("{s}\n", .{
+            "  init, i         initializes a new README.md file in the current dir,",
+        });
+        std.debug.print("{s}\n", .{
+            "                      does nothing if the file already exists",
+        });
         std.debug.print("{s}{s}Flags:{s}\n", .{ clear, orange_bold, clear });
-        std.debug.print("{s}{s}\n", .{ light_green, " --verbose, -V    prints the full env data, including" });
-        std.debug.print("{s}\n", .{"                      the language compiler & package manager versions,"});
-        std.debug.print("{s}\n", .{"                      as well as the type of the program: `binary | library`"});
+        std.debug.print("{s}{s}\n", .{
+            light_green,
+            " --verbose, -V    prints the full env data, including",
+        });
+        std.debug.print("{s}\n", .{
+            "                      the language compiler & package manager versions,",
+        });
+        std.debug.print("{s}\n", .{
+            "                      as well as the type of the program: `binary | library`",
+        });
         std.debug.print("{s}{s}\n", .{ " --json, -J       prints the env data as json", clear });
     }
 

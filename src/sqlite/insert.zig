@@ -4,6 +4,8 @@ const c = @import("../root.zig").c;
 const String = @import("../root.zig").String;
 const Error = sqlite.Error;
 const extend = sqlite.extend_bytes;
+const Stmt = sqlite.Statement;
+const StmtConstr = sqlite.StatementConstructor;
 
 pub const InsertIntoTable = struct {
     table: []const u8,

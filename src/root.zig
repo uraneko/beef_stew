@@ -7,6 +7,8 @@ pub const c = @cImport({
 });
 pub const sqlite = @import("./sqlite.zig");
 const CreateTable = sqlite.CreateTable;
+const Insert = sqlite.StatementConstructor;
+const Stmt = sqlite.Statement;
 
 pub const STEW_PATH = "forge/zig/beef_stew/";
 pub const DATA_PATH = "data/main.db3";
@@ -26,6 +28,7 @@ pub fn get_home_env_var(map: *std.process.Environ.Map) ![]const u8 {
         return Error.FailedToGetHomeEnvVar;
     }
 }
+
 pub fn init_env(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -49,10 +52,27 @@ pub fn init_env(
     defer allocator.free(data_path);
 
     const db = try sqlite.connect(data_path);
-    defer sqlite.close(db);
+    defer _ = sqlite.close(db);
 
     try setup_comps_table(db, allocator);
-    // try setup_templates_table(db, allocator);
+    try setup_templates_table(db, allocator);
+
+    try test_insert(db, allocator);
+}
+
+fn test_insert(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
+    var builder = try Insert.init("components", allocator);
+    defer builder.deinit();
+
+    try builder.text("name", "title");
+    try builder.text("value", "<h1>{title}</h1>");
+    try builder.int("languages", 17);
+    var stmt = try builder.statement(allocator);
+    defer _ = stmt.deinit(allocator);
+
+    try stmt.prepare(db);
+    try stmt.bind_all(db);
+    try stmt.step();
 }
 
 /// sets up this program's environment if it doesn't exist
@@ -123,15 +143,28 @@ pub const String = struct {
         allocator.free(self.*.buffer);
     }
 
+    // TODO handle self.buffer not having enough memory
     pub fn push(self: *String, byte: u8) void {
         self.*.buffer[self.*.idx] = byte;
         self.*.idx += 1;
     }
 
+    /// extends the contents of self's buffer with bytes
+    // TODO handle self.buffer not having enough memory
     pub fn extend(self: *String, bytes: []const u8) void {
         const blen = bytes.len;
         for (self.*.idx..blen + self.*.idx, 0..blen) |sidx, bidx| {
             self.*.buffer[sidx] = bytes[bidx];
+        }
+        self.*.idx += blen;
+    }
+
+    /// same as extend but takes a pointer to a slice
+    // TODO handle self.buffer not having enough memory
+    pub fn ptr_extend(self: *String, bytes: *[]const u8) void {
+        const blen = bytes.*.len;
+        for (self.*.idx..blen + self.*.idx, 0..blen) |sidx, bidx| {
+            self.*.buffer[sidx] = bytes.*[bidx];
         }
         self.*.idx += blen;
     }

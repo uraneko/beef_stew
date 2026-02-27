@@ -5,6 +5,7 @@ const String = root.String;
 const err = root.Error;
 pub const CreateTable = @import("sqlite/create.zig").CreateTable;
 pub const InsertIntoTable = @import("sqlite/insert.zig").InsertIntoTable;
+pub const Select = @import("sqlite/select.zig").Select;
 
 pub fn connect(path: []const u8) !?*c.sqlite3 {
     const c_path: [*c]const u8 = @ptrCast(path);
@@ -185,13 +186,14 @@ pub const StatementConstructor = struct {
                 query.extend(", ");
             }
         }
-        query.extend(");");
+        query.push(')');
 
         return .{ query, slice };
     }
 
     pub fn statement(self: *@This(), allocator: std.mem.Allocator) !Statement {
         const query, const bindings = try self.gen_stmt_vals(allocator);
+        _ = try query.shrink_to_size(allocator);
         return .{
             .query = query,
             .bindings = bindings,
@@ -204,14 +206,17 @@ pub const StatementConstructor = struct {
 
 pub const Statement = struct {
     query: String,
-    bindings: []SqliteVal,
+    bindings: ?[]SqliteVal,
     idx: usize,
     errmsg: [*c]const u8,
     stmt: ?*c.sqlite3_stmt,
 
+    // note that Statement deinits the String
     pub fn deinit(self: *Statement, allocator: std.mem.Allocator) c_int {
         self.*.query.deinit(allocator);
-        allocator.free(self.*.bindings);
+        if (self.*.bindings) |bindings| {
+            allocator.free(bindings);
+        }
 
         return c.sqlite3_finalize(self.*.stmt);
     }
@@ -221,7 +226,7 @@ pub const Statement = struct {
         allocator: std.mem.Allocator,
         bindings: []SqliteVal,
     ) void {
-        defer allocator.free(self.*.bindings);
+        defer if (self.*.bindings) |b| allocator.free(b);
         self.*.bindings = bindings;
     }
 
@@ -230,7 +235,7 @@ pub const Statement = struct {
     }
 
     pub fn prepare(self: *@This(), db: ?*c.sqlite3) !void {
-        std.debug.print("{s}\n", .{self.*.query.as_str()});
+        std.debug.print("<{s}>\n", .{self.*.query.as_cstr()});
         if (c.SQLITE_OK != c.sqlite3_prepare_v2(
             db,
             self.*.query.as_cstr(),
@@ -239,14 +244,14 @@ pub const Statement = struct {
             null,
         )) {
             self.catch_error(db);
-            std.debug.print(">{s}<\n", .{self.errmsg});
+            std.debug.print(">{s}<\n", .{self.*.errmsg});
             return Error.FailedToPrepareSqliteStatement;
         }
     }
 
     pub fn bind(self: *Statement, db: ?*c.sqlite3) !void {
         const c_idx: c_int = @intCast(self.*.idx + 1);
-        const bind_op = switch (self.*.bindings[self.*.idx]) {
+        const bind_op = switch (self.*.bindings.?[self.*.idx]) {
             .text => |t| c.sqlite3_bind_text(
                 self.*.stmt,
                 c_idx,
@@ -270,7 +275,7 @@ pub const Statement = struct {
         };
         if (c.SQLITE_OK != bind_op) {
             self.catch_error(db);
-            std.debug.print(">{s}<\n", .{self.errmsg});
+            std.debug.print(">{s}<\n", .{self.*.errmsg});
             return Error.SqliteBindFailed;
         }
         self.*.idx += 1;
@@ -283,10 +288,17 @@ pub const Statement = struct {
         }
     }
 
-    pub fn step(self: *Statement) !void {
-        if (c.SQLITE_DONE != c.sqlite3_step(self.*.stmt)) {
-            return Error.FailedAtStep;
-        }
+    pub fn step(self: *Statement, db: ?*c.sqlite3) !bool {
+        return switch (c.sqlite3_step(self.stmt)) {
+            c.SQLITE_DONE => true,
+            c.SQLITE_ROW => false,
+            else => {
+                self.catch_error(db);
+                std.debug.print(">{s}<\n", .{self.errmsg});
+
+                return Error.FailedAtStep;
+            },
+        };
     }
 
     pub fn reset(self: *@This()) void {

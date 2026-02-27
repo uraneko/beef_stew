@@ -7,6 +7,7 @@ pub const c = @cImport({
 });
 pub const sqlite = @import("./sqlite.zig");
 const CreateTable = sqlite.CreateTable;
+const Select = sqlite.Select;
 const Insert = sqlite.StatementConstructor;
 const Stmt = sqlite.Statement;
 
@@ -57,7 +58,8 @@ pub fn init_env(
     try setup_comps_table(db, allocator);
     try setup_templates_table(db, allocator);
 
-    try test_insert(db, allocator);
+    // try test_insert(db, allocator);
+    try test_select(db, allocator);
 }
 
 fn test_insert(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
@@ -72,7 +74,17 @@ fn test_insert(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
 
     try stmt.prepare(db);
     try stmt.bind_all(db);
-    try stmt.step();
+    try stmt.step(db);
+}
+
+fn test_select(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
+    var cols = [1][]const u8{"value"};
+    var select = try Select.init("components", allocator, &cols);
+    defer select.deinit();
+
+    try select.condition("name", "title");
+    const val = try select.select(db, allocator);
+    _ = val;
 }
 
 /// sets up this program's environment if it doesn't exist

@@ -229,13 +229,16 @@ const Stew = struct {
     }
 
     fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?Envr {
-        if (self.help_) {
-            Stew.help();
-        }
-
-        if (self.env_) {
-            return try Stew.env(allocator, io, false);
-        }
+        _ = allocator;
+        _ = io;
+        _ = self;
+        // if (self.help_) {
+        //     Stew.help();
+        // }
+        //
+        // if (self.env_) {
+        //     return try Stew.env(allocator, io, false);
+        // }
 
         return null;
     }

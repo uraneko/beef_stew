@@ -23,12 +23,12 @@ pub fn build(b: *std.Build) void {
 
     const create = b.createModule(.{ .root_source_file = b.path("src/sqlite/create.zig") });
     const insert = b.createModule(.{ .root_source_file = b.path("src/sqlite/insert.zig") });
-    const query = b.createModule(.{ .root_source_file = b.path("src/sqlite/query.zig") });
+    const select = b.createModule(.{ .root_source_file = b.path("src/sqlite/select.zig") });
 
     const sqlite = b.createModule(.{ .root_source_file = b.path("src/sqlite.zig") });
     sqlite.addImport("create", create);
     sqlite.addImport("insert", insert);
-    sqlite.addImport("query", query);
+    sqlite.addImport("select", select);
 
     // This creates a module, which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.

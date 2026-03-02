@@ -49,6 +49,9 @@ pub const Error = error{
     TableNameTypeCantBeUndefined,
     PKConstraintCantCoexistWithUnique,
     SqliteExecFailed,
+    InvalidSqliteTypeValue,
+    InvalidTypeValCombi,
+    BadTypeForOperation,
 };
 
 // pub const Column = union(enum) {
@@ -56,15 +59,41 @@ pub const Error = error{
 //     KeyVal: struct { key: []const u8, val: []const u8 },
 // };
 
-pub const SqliteType = enum {
-    text,
-    blob,
-    int,
-    real,
-    null,
+pub fn is_int(num_ty: type) bool {
+    return switch (num_ty) {
+        u8,
+        u16,
+        u32,
+        u64,
+        u128,
+        i8,
+        i16,
+        i32,
+        i64,
+        comptime_int,
+        c_int,
+        c_uint,
+        => true,
+        else => false,
+    };
+}
 
-    pub fn as_str(self: SqliteType) []const u8 {
-        return switch (self) {
+pub fn is_float(flt_ty: type) bool {
+    return switch (flt_ty) {
+        f32, f64, f128 => true,
+        else => false,
+    };
+}
+
+pub const SqliteType = enum(u8) {
+    text = 3,
+    blob = 4,
+    int = 1,
+    real = 2,
+    null = 5,
+
+    pub fn as_str(self: *const SqliteType) []const u8 {
+        return switch (self.*) {
             .text => "text",
             .blob => "blob",
             .int => "integer",
@@ -72,14 +101,83 @@ pub const SqliteType = enum {
             .null => "null",
         };
     }
+
+    // the int values are found at https://sqlite.org/c3ref/c_blob.html
+    pub fn from_c_int(uint: c_int) !@This() {
+        return switch (uint) {
+            1 => .int,
+            2 => .real,
+            3 => .text,
+            4 => .blob,
+            5 => .null,
+            else => Error.InvalidSqliteTypeValue,
+        };
+    }
 };
 
 pub const SqliteVal = union(enum) {
-    text: [*c]const u8,
+    text: []const u8,
     blob: ?*const anyopaque,
     int: i128,
     real: f64,
     null,
+
+    pub fn free_texts(vals: []@This(), allocator: std.mem.Allocator) void {
+        for (vals) |val| {
+            switch (val) {
+                .text => |t| allocator.free(t),
+                else => continue,
+            }
+        }
+    }
+
+    pub fn from_stmt_col(
+        stmt: ?*c.sqlite3_stmt,
+        idx: c_int,
+        allocator: std.mem.Allocator,
+    ) !@This() {
+        const ty = c.sqlite3_column_type(stmt, idx);
+
+        return switch (ty) {
+            // int
+            1 => i: {
+                const val = c.sqlite3_column_int(stmt, idx);
+                const int: i128 = @intCast(val);
+                break :i .{ .int = int };
+            },
+            // real
+            2 => f: {
+                const val = c.sqlite3_column_double(stmt, idx);
+                const flt: f64 = @floatCast(val);
+                break :f .{ .real = flt };
+            },
+            // text
+            3 => t: {
+                const val = c.sqlite3_column_text(stmt, idx);
+                const data = try root.cstr_to_str(val, allocator);
+
+                break :t .{ .text = data };
+            },
+            // blob
+            4 => b: {
+                const val = c.sqlite3_column_blob(stmt, idx);
+                break :b .{ .blob = val };
+            },
+            // null
+            5 => .null,
+            else => Error.InvalidSqliteTypeValue,
+        };
+    }
+
+    pub fn print(self: *const @This()) void {
+        switch (self.*) {
+            .int => |i| std.debug.print("sql-val -> {d}\n", .{i}),
+            .real => |r| std.debug.print("sql-val -> {d}\n", .{r}),
+            .text => |t| std.debug.print("sql-val -> {s}\n", .{t}),
+            .blob => |b| std.debug.print("sql-val -> {any}\n", .{b}),
+            .null => std.debug.print("sql-val -> NULL", .{}),
+        }
+    }
 };
 
 pub const StatementConstructor = struct {
@@ -97,14 +195,14 @@ pub const StatementConstructor = struct {
         self.*.rows.deinit();
     }
 
-    pub fn text(self: *@This(), col: []const u8, val: anytype) !void {
-        const len = val.len;
+    pub fn text(self: *@This(), col: []const u8, val: []const u8) !void {
+        // const len = val.len;
         // @compileLog(@TypeOf(val) == *const [len:0]u8);
-        if (@TypeOf(val) != *const [len:0]u8) {
-            return Error.ValueTypeMismatch;
-        }
-        const cstr: [*c]const u8 = @ptrCast(val);
-        try self.*.rows.put(col, SqliteVal{ .text = cstr });
+        // if (@TypeOf(val) != *const [len:0]u8) {
+        //     return Error.ValueTypeMismatch;
+        // }
+        // const cstr: [*c]const u8 = @ptrCast(val);
+        try self.*.rows.put(col, SqliteVal{ .text = val });
     }
 
     pub fn blob(self: *@This(), col: []const u8, val: anytype) !void {
@@ -192,7 +290,7 @@ pub const StatementConstructor = struct {
     }
 
     pub fn statement(self: *@This(), allocator: std.mem.Allocator) !Statement {
-        const query, const bindings = try self.gen_stmt_vals(allocator);
+        var query, const bindings = try self.gen_stmt_vals(allocator);
         _ = try query.shrink_to_size(allocator);
         return .{
             .query = query,
@@ -252,13 +350,16 @@ pub const Statement = struct {
     pub fn bind(self: *Statement, db: ?*c.sqlite3) !void {
         const c_idx: c_int = @intCast(self.*.idx + 1);
         const bind_op = switch (self.*.bindings.?[self.*.idx]) {
-            .text => |t| c.sqlite3_bind_text(
-                self.*.stmt,
-                c_idx,
-                t,
-                @intCast(std.mem.len(t)),
-                c.SQLITE_STATIC,
-            ),
+            .text => |t| t: {
+                const ctext: [*c]const u8 = @ptrCast(t);
+                break :t c.sqlite3_bind_text(
+                    self.*.stmt,
+                    c_idx,
+                    ctext,
+                    @intCast(std.mem.len(ctext)),
+                    c.SQLITE_STATIC,
+                );
+            },
             // WARN this is broken for now
             // dont use blobs
             .blob => |b| c.sqlite3_bind_blob(
@@ -282,9 +383,11 @@ pub const Statement = struct {
     }
 
     pub fn bind_all(self: *Statement, db: ?*c.sqlite3) !void {
-        for (0..self.*.bindings.len) |i| {
-            _ = i;
-            try self.bind(db);
+        if (self.*.bindings) |b| {
+            for (0..b.len) |i| {
+                _ = i;
+                try self.bind(db);
+            }
         }
     }
 

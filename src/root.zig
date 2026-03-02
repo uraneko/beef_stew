@@ -6,6 +6,7 @@ pub const c = @cImport({
     @cInclude("sqlite3.h");
 });
 pub const sqlite = @import("./sqlite.zig");
+const SqliteVal = sqlite.SqliteVal;
 const CreateTable = sqlite.CreateTable;
 const Select = sqlite.Select;
 const Insert = sqlite.StatementConstructor;
@@ -58,7 +59,7 @@ pub fn init_env(
     try setup_comps_table(db, allocator);
     try setup_templates_table(db, allocator);
 
-    // try test_insert(db, allocator);
+    try test_insert(db, allocator);
     try test_select(db, allocator);
 }
 
@@ -66,25 +67,31 @@ fn test_insert(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
     var builder = try Insert.init("components", allocator);
     defer builder.deinit();
 
-    try builder.text("name", "title");
-    try builder.text("value", "<h1>{title}</h1>");
-    try builder.int("languages", 17);
+    try builder.text("name", "license");
+    try builder.text("value", "<a href='LICENSE'></a>");
+    try builder.int("languages", 0);
     var stmt = try builder.statement(allocator);
     defer _ = stmt.deinit(allocator);
 
     try stmt.prepare(db);
     try stmt.bind_all(db);
-    try stmt.step(db);
+    _ = try stmt.step(db);
 }
 
 fn test_select(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
-    var cols = [1][]const u8{"value"};
+    var cols = [3][]const u8{ "name", "value", "languages" };
     var select = try Select.init("components", allocator, &cols);
     defer select.deinit();
 
     try select.condition("name", "title");
-    const val = try select.select(db, allocator);
-    _ = val;
+    const vals = try select.select(db, allocator, 1, 3);
+    defer {
+        SqliteVal.free_texts(vals, allocator);
+        allocator.free(vals);
+    }
+    // for (vals) |val| {
+    // val.print();
+    // }
 }
 
 /// sets up this program's environment if it doesn't exist
@@ -217,3 +224,18 @@ pub const String = struct {
         return @ptrCast(str);
     }
 };
+
+pub fn cstr_to_str(cstr: [*c]const u8, allocator: std.mem.Allocator) ![]const u8 {
+    // TODO if cstr ! contains a null byte then error out
+    var len: usize = 0;
+    while (cstr[len] != 0) {
+        len += 1;
+    }
+
+    var slice = try allocator.alloc(u8, len);
+    for (0..len) |idx| {
+        slice[idx] = cstr[idx];
+    }
+
+    return slice;
+}

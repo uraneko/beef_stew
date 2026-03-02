@@ -1,5 +1,7 @@
 const std = @import("std");
 const sqlite = @import("../sqlite.zig");
+const SqliteType = sqlite.SqliteType;
+const SqliteVal = sqlite.SqliteVal;
 const Statement = sqlite.Statement;
 const c = @import("../root.zig").c;
 const Error = sqlite.Error;
@@ -87,30 +89,45 @@ pub const Select = struct {
         };
     }
 
-    pub fn select(self: *@This(), db: ?*c.sqlite3, allocator: std.mem.Allocator) !?[*c]const u8 {
+    // sqlite3 selection works like so:
+    // 1= prepare statement
+    // 2= make a step <- this gives us a single row of all the requested columns values
+    // 3= get the row values using as many qlite3_column_<type> function
+    // calls as needed (watch out for the order of values)
+    // 4= repeat 2..=3 until SQLITE_DONE is returned
+    pub fn select(
+        self: *@This(),
+        db: ?*c.sqlite3,
+        allocator: std.mem.Allocator,
+        // estimated number of result rows
+        estimate: usize,
+        rlen: usize,
+    ) ![]SqliteVal {
         var stmt = try self.statement(allocator);
         defer _ = stmt.deinit(allocator);
         try stmt.prepare(db);
 
-        // TODO actually handle fetched values
-        // would need to make columns.columns data a hashmap to include the types of the columns being fetched
-        // also probably make return type anytype and try to return different anon structs
-        // NOTE only select some_text from table_name where c0 = f0 and c1 = f1...
-        // currently works
-        var idx: c_int = 0;
-        var val: ?[*c]const u8 = null;
+        var slice = try allocator.alloc(SqliteVal, estimate * rlen);
+        // every step taken fetchs a row
+        var idx: usize = 0;
+        // WARN sqlite fetched text, blob data is invalidated when step,
+        // reset or finalize are called
         while (!try stmt.step(db)) {
-            val = c.sqlite3_column_text(stmt.stmt, idx);
-            std.debug.print("-> >{s}<\n", .{val.?});
-            idx += 1;
-            // val = c.sqlite3_column_text(stmt.stmt, idx);
-            // std.debug.print("-> >{s}<\n", .{val.?});
-            // idx += 1;
-            // const i = c.sqlite3_column_int(stmt.stmt, idx);
-            // std.debug.print("-> >{d}<\n", .{i});
-            // idx += 1;
+            for (0..rlen) |pos| {
+                const rpos: c_int = @intCast(pos);
+                slice[idx + pos] = try SqliteVal.from_stmt_col(stmt.stmt, rpos, allocator);
+            }
+            idx += rlen;
         }
 
-        return val;
+        if (slice.len > idx) {
+            slice = try allocator.realloc(slice, idx);
+        }
+
+        for (slice) |s| {
+            s.print();
+        }
+
+        return slice;
     }
 };

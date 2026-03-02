@@ -19,6 +19,8 @@ pub const Select = struct {
     table: []const u8,
     /// columns to keep
     columns: Cols,
+    /// the operator to use for the conditions if any
+    operator_: []const u8,
     /// select conditions, e.g., where x = y;
     conditions: std.StringHashMap([]const u8),
 
@@ -28,6 +30,7 @@ pub const Select = struct {
             .table = table,
             .columns = cols,
             .conditions = .init(allocator),
+            .operator_ = "or",
         };
     }
 
@@ -35,8 +38,14 @@ pub const Select = struct {
         self.*.conditions.deinit();
     }
 
+    // this should be a list, array...
+    // since a hashmap doesnt allow for duplicate keys
     pub fn condition(self: *@This(), col: []const u8, val: []const u8) !void {
         try self.*.conditions.put(col, val);
+    }
+
+    pub fn operator(self: *@This(), operator_: []const u8) void {
+        self.operator_ = operator_;
     }
 
     pub fn query(self: *@This(), allocator: std.mem.Allocator) !String {
@@ -70,9 +79,11 @@ pub const Select = struct {
             stmt.ptr_extend(entry.key_ptr);
             stmt.extend(" = '");
             stmt.ptr_extend(entry.value_ptr);
-            stmt.extend("' and ");
+            stmt.extend("' ");
+            stmt.extend(self.*.operator_);
+            stmt.push(' ');
         }
-        _ = try stmt.pop_index(5);
+        _ = try stmt.pop_index(2 + self.*.operator_.len);
         // stmt.push(';');
         _ = try stmt.shrink_to_size(allocator);
 
@@ -124,9 +135,9 @@ pub const Select = struct {
             slice = try allocator.realloc(slice, idx);
         }
 
-        for (slice) |s| {
-            s.print();
-        }
+        // for (slice) |s| {
+        //     s.print();
+        // }
 
         return slice;
     }

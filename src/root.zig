@@ -6,9 +6,9 @@ pub const c = @cImport({
     @cInclude("sqlite3.h");
 });
 pub const sqlite = @import("./sqlite.zig");
-const SqliteVal = sqlite.SqliteVal;
+pub const SqliteVal = sqlite.SqliteVal;
 const CreateTable = sqlite.CreateTable;
-const Select = sqlite.Select;
+pub const Select = sqlite.Select;
 const Insert = sqlite.StatementConstructor;
 const Stmt = sqlite.Statement;
 
@@ -59,7 +59,7 @@ pub fn init_env(
     try setup_comps_table(db, allocator);
     try setup_templates_table(db, allocator);
 
-    try test_insert(db, allocator);
+    // try test_insert(db, allocator);
     try test_select(db, allocator);
 }
 

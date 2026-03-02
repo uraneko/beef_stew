@@ -2,6 +2,8 @@ const std = @import("std");
 const Io = std.Io;
 
 const root = @import("./root.zig");
+const Select = root.Select;
+const SqliteVal = root.SqliteVal;
 const c = root.c;
 const err = root.Error;
 
@@ -65,7 +67,7 @@ pub fn main(init: std.process.Init) !void {
     } else return;
     defer allocator.free(envr._path);
 
-    envr.print();
+    try envr.run(&stew, init.io, allocator);
 
     // std.debug.print("{any}", .{env});
 
@@ -107,7 +109,8 @@ const StewError = error{
 
 const Stew = struct {
     help_: bool = false,
-    env_: bool = false,
+    env_: bool = true,
+    init_: bool = false,
 
     fn from_args(args: ?[][:0]const u8) !Stew {
         var stew = Stew{};
@@ -116,6 +119,8 @@ const Stew = struct {
                 // std.debug.print("{any}", .{chunk});
                 if (std.mem.eql(u8, chunk, "help") or std.mem.eql(u8, chunk, "h")) {
                     stew.help_ = true;
+                } else if (std.mem.eql(u8, chunk, "i") or std.mem.eql(u8, chunk, "init")) {
+                    stew.init_ = true;
                 } else if (std.mem.eql(u8, chunk, "e") or std.mem.eql(u8, chunk, "env")) {
                     stew.env_ = true;
                 }
@@ -219,48 +224,71 @@ const Stew = struct {
         }
         if (toolchain == null) return err.UnrecognizableEnvironment;
 
-        return Envr{ .contains_readme = contains_readme, ._path = path, .name = name, .lang = lang.?, .toolchain = toolchain.? };
+        return Envr{ .contains_readme = contains_readme, ._path = path, .package = name, .lang = lang.?, .toolchain = toolchain.? };
     }
 
     /// creates a new README.md file in the current repo
     /// from the language template in the main database
-    fn init(envr: *const Envr) void {
-        if (envr.contains_readme) return;
-    }
-
     fn run(self: Stew, io: std.Io, allocator: std.mem.Allocator) !?Envr {
-        _ = allocator;
-        _ = io;
-        _ = self;
-        // if (self.help_) {
-        //     Stew.help();
-        // }
-        //
-        // if (self.env_) {
-        //     return try Stew.env(allocator, io, false);
-        // }
+        if (self.help_) {
+            Stew.help();
+            return null;
+        }
 
-        return null;
+        return try Stew.env(allocator, io, false);
     }
 };
 
 const Envr = struct {
     _path: []const u8,
     contains_readme: bool,
-    name: []const u8,
+    package: []const u8,
     lang: Language,
     toolchain: Toolchain,
 
     fn print(self: *const Envr) void {
-        std.debug.print("package   -> {s}\n", .{self.name});
+        std.debug.print("package   -> {s}\n", .{self.package});
         std.debug.print("language  -> {s}\n", .{self.lang.as_str()});
         std.debug.print("toolchain -> {s}\n", .{self.toolchain.as_str()});
         std.debug.print("readme?   -> {any}\n", .{self.contains_readme});
     }
+
+    fn run(self: Envr, stew: *const Stew, io: std.Io, allocator: std.mem.Allocator) !void {
+        if (stew.init_) {
+            return self.init(io, allocator);
+        }
+
+        self.print();
+    }
+
+    fn init(self: *const Envr, io: std.Io, allocator: std.mem.Allocator) !void {
+        if (self.contains_readme) return;
+        var comp_names = [1][]const u8{"title"};
+        const comps = try fetch_comps(&comp_names, allocator);
+        defer {
+            SqliteVal.free_texts(comps, allocator);
+            allocator.free(comps);
+        }
+        const comp = switch (comps[0]) {
+            .text => |t| t,
+            else => unreachable,
+        };
+        const re_size = std.mem.replacementSize(u8, comp, "{title}", self.package);
+        const title = try allocator.alloc(u8, re_size);
+        defer allocator.free(title);
+        _ = std.mem.replace(u8, comp, "{title}", self.package, title);
+        const repo = std.Io.Dir.cwd();
+
+        var file = try repo.createFile(io, "README.md", .{
+            .truncate = false,
+            .exclusive = true,
+        });
+        try file.writePositionalAll(io, title, 0);
+    }
 };
 
 const orange_bold = "\x1b[1;38;2;213;123;76m";
-const light_green = "\x1b[38;2;91;102;93m";
+const light_green = "\x1b[38;2;131;142;153m";
 const clear = "\x1b[0m";
 
 const lang_checks = std.StaticStringMap(Language).initComptime(.{
@@ -282,22 +310,6 @@ const toolchain_checks = std.StaticStringMap(Toolchain).initComptime(.{
     .{ "gleam.toml", .Gleam },
     .{ "pack.toml", .Pack2 },
 });
-
-const help_msg =
-    \\ README.md editor/manager
-    \\ Usage: stew [COMMAND] [FLAGS]
-    \\ 
-    \\ Commands: 
-    \\  help, h         print this help message
-    \\  env, e          prints out the env data: `Lang - Package Manager`, 
-    \\                      if the cwd is a programming repo 
-    \\
-    \\ Flags: 
-    \\ --verbose, -V    prints the full env data, including 
-    \\                      the language compiler & toolchain versions, 
-    \\                      as well as the type of the program: `binary | library`
-    \\ --json, -J       prints the env data as json 
-;
 
 const Language = enum {
     Rust,
@@ -344,3 +356,17 @@ const Toolchain = enum {
         };
     }
 };
+
+fn fetch_comps(comps: [][]const u8, allocator: std.mem.Allocator) ![]SqliteVal {
+    var value_column = [1][]const u8{"value"};
+    var select = try Select.init("components", allocator, &value_column);
+    defer select.deinit();
+
+    try select.condition("name", "title");
+    // try select.condition("name", "license");
+    // select.operator("or");
+    const db = try root.sqlite.connect("data/main.db3");
+    defer _ = root.sqlite.close(db);
+
+    return try select.select(db, allocator, comps.len, 1);
+}

@@ -333,7 +333,7 @@ pub const Statement = struct {
     }
 
     pub fn prepare(self: *@This(), db: ?*c.sqlite3) !void {
-        std.debug.print("<{s}>\n", .{self.*.query.as_cstr()});
+        // std.debug.print("<{s}>\n", .{self.*.query.as_cstr()});
         if (c.SQLITE_OK != c.sqlite3_prepare_v2(
             db,
             self.*.query.as_cstr(),

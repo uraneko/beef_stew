@@ -67,7 +67,7 @@ pub fn main(init: std.process.Init) !void {
     } else return;
     defer allocator.free(envr._path);
 
-    try envr.run(&stew, init.io, allocator);
+    try envr.run(&stew, init.io, allocator, init.environ_map);
 
     // std.debug.print("{any}", .{env});
 
@@ -253,18 +253,32 @@ const Envr = struct {
         std.debug.print("readme?   -> {any}\n", .{self.contains_readme});
     }
 
-    fn run(self: Envr, stew: *const Stew, io: std.Io, allocator: std.mem.Allocator) !void {
+    fn run(
+        self: Envr,
+        stew: *const Stew,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        map: *std.process.Environ.Map,
+    ) !void {
         if (stew.init_) {
-            return self.init(io, allocator);
+            return self.init(io, allocator, map);
         }
 
         self.print();
     }
 
-    fn init(self: *const Envr, io: std.Io, allocator: std.mem.Allocator) !void {
-        if (self.contains_readme) return;
-        var comp_names = [1][]const u8{"title"};
-        const comps = try fetch_comps(&comp_names, allocator);
+    fn init(
+        self: *const Envr,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        map: *std.process.Environ.Map,
+    ) !void {
+        if (self.contains_readme) {
+            std.debug.print("README.md already exists", .{});
+
+            return;
+        }
+        const comps = try fetch_comps(allocator, map);
         defer {
             SqliteVal.free_texts(comps, allocator);
             allocator.free(comps);
@@ -273,6 +287,8 @@ const Envr = struct {
             .text => |t| t,
             else => unreachable,
         };
+        // TODO slect and fetch have been fixed
+        // but parsing and writing components is yet to be finalized
         const re_size = std.mem.replacementSize(u8, comp, "{title}", self.package);
         const title = try allocator.alloc(u8, re_size);
         defer allocator.free(title);
@@ -357,16 +373,23 @@ const Toolchain = enum {
     }
 };
 
-fn fetch_comps(comps: [][]const u8, allocator: std.mem.Allocator) ![]SqliteVal {
+fn fetch_comps(
+    allocator: std.mem.Allocator,
+    map: *std.process.Environ.Map,
+) ![]SqliteVal {
     var value_column = [1][]const u8{"value"};
-    var select = try Select.init("components", allocator, &value_column);
-    defer select.deinit();
+    var select = Select.init("components", &value_column);
 
-    try select.condition("name", "title");
+    select.where("name = 'title'");
     // try select.condition("name", "license");
     // select.operator("or");
-    const db = try root.sqlite.connect("data/main.db3");
+    const home = try root.get_home_env_var(map);
+    const path = try std.mem.concat(allocator, u8, &[5][]const u8{
+        home, "/", root.STEW_PATH, "/", root.DATA_PATH,
+    });
+    defer allocator.free(path);
+    const db = try root.sqlite.connect(path);
     defer _ = root.sqlite.close(db);
 
-    return try select.select(db, allocator, comps.len, 1);
+    return try select.select(db, allocator, 1);
 }

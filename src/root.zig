@@ -60,7 +60,7 @@ pub fn init_env(
     try setup_templates_table(db, allocator);
 
     // try test_insert(db, allocator);
-    try test_select(db, allocator);
+    // try test_select(db, allocator);
 }
 
 fn test_insert(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
@@ -80,11 +80,10 @@ fn test_insert(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
 
 fn test_select(db: ?*c.sqlite3, allocator: std.mem.Allocator) !void {
     var cols = [3][]const u8{ "name", "value", "languages" };
-    var select = try Select.init("components", allocator, &cols);
-    defer select.deinit();
+    var select = Select.init("components", &cols);
 
-    try select.condition("name", "title");
-    const vals = try select.select(db, allocator, 1, 3);
+    select.where("name = 'title'");
+    const vals = try select.select(db, allocator, 1);
     defer {
         SqliteVal.free_texts(vals, allocator);
         allocator.free(vals);

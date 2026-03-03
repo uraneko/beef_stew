@@ -20,32 +20,37 @@ pub const Select = struct {
     /// columns to keep
     columns: Cols,
     /// the operator to use for the conditions if any
-    operator_: []const u8,
+    // operator_: []const u8,
     /// select conditions, e.g., where x = y;
-    conditions: std.StringHashMap([]const u8),
+    where_clause: ?[]const u8,
 
-    pub fn init(table: []const u8, allocator: std.mem.Allocator, columns: ?[][]const u8) !@This() {
+    pub fn init(table: []const u8, columns: ?[][]const u8) @This() {
         const cols = if (columns) |cols| Cols{ .columns = cols } else .glob;
         return .{
             .table = table,
             .columns = cols,
-            .conditions = .init(allocator),
-            .operator_ = "or",
+            .where_clause = null,
+            // .conditions = .init(allocator),
+            // .operator_ = "or",
         };
     }
 
-    pub fn deinit(self: *@This()) void {
-        self.*.conditions.deinit();
-    }
+    // pub fn deinit(self: *@This()) void {
+    //     self.*.conditions.deinit();
+    // }
 
     // this should be a list, array...
     // since a hashmap doesnt allow for duplicate keys
-    pub fn condition(self: *@This(), col: []const u8, val: []const u8) !void {
-        try self.*.conditions.put(col, val);
-    }
+    // pub fn condition(self: *@This(), col: []const u8, val: []const u8) !void {
+    //     try self.*.conditions.put(col, val);
+    // }
 
-    pub fn operator(self: *@This(), operator_: []const u8) void {
-        self.operator_ = operator_;
+    // pub fn operator(self: *@This(), operator_: []const u8) void {
+    //     self.operator_ = operator_;
+    // }
+
+    pub fn where(self: *@This(), clause: []const u8) void {
+        self.where_clause = clause;
     }
 
     pub fn query(self: *@This(), allocator: std.mem.Allocator) !String {
@@ -68,22 +73,27 @@ pub const Select = struct {
         }
         stmt.extend(self.*.table);
 
-        if (self.*.conditions.count() == 0) {
-            // stmt.push(';');
-            _ = try stmt.shrink_to_size(allocator);
-            return stmt;
+        // if (self.*.conditions.count() == 0) {
+        //     // stmt.push(';');
+        //     _ = try stmt.shrink_to_size(allocator);
+        //     return stmt;
+        // }
+
+        if (self.where_clause) |clause| {
+            stmt.extend(" where ");
+            stmt.extend(clause);
         }
-        stmt.extend(" where ");
-        var iter = self.*.conditions.iterator();
-        while (iter.next()) |entry| {
-            stmt.ptr_extend(entry.key_ptr);
-            stmt.extend(" = '");
-            stmt.ptr_extend(entry.value_ptr);
-            stmt.extend("' ");
-            stmt.extend(self.*.operator_);
-            stmt.push(' ');
-        }
-        _ = try stmt.pop_index(2 + self.*.operator_.len);
+        // stmt.extend(" where ");
+        // var iter = self.*.conditions.iterator();
+        // while (iter.next()) |entry| {
+        //     stmt.ptr_extend(entry.key_ptr);
+        //     stmt.extend(" = '");
+        //     stmt.ptr_extend(entry.value_ptr);
+        //     stmt.extend("' ");
+        //     stmt.extend(self.*.operator_);
+        //     stmt.push(' ');
+        // }
+        // _ = try stmt.pop_index(2 + self.*.operator_.len);
         // stmt.push(';');
         _ = try stmt.shrink_to_size(allocator);
 
@@ -112,23 +122,30 @@ pub const Select = struct {
         allocator: std.mem.Allocator,
         // estimated number of result rows
         estimate: usize,
-        rlen: usize,
     ) ![]SqliteVal {
         var stmt = try self.statement(allocator);
         defer _ = stmt.deinit(allocator);
         try stmt.prepare(db);
+        const column_count: usize = @intCast(stmt.count_columns());
 
-        var slice = try allocator.alloc(SqliteVal, estimate * rlen);
+        // std.debug.print("allocate = {d}\n", .{column_count * estimate});
+        var slice = try allocator.alloc(SqliteVal, column_count * estimate);
         // every step taken fetchs a row
         var idx: usize = 0;
         // WARN sqlite fetched text, blob data is invalidated when step,
         // reset or finalize are called
         while (!try stmt.step(db)) {
-            for (0..rlen) |pos| {
+            // realloc more mem if we ran out
+            if (idx + column_count != 0 and slice.len == idx + column_count - 1) {
+                slice = try allocator.realloc(slice, idx * 2 + 2);
+            }
+
+            for (0..column_count) |pos| {
+                // std.debug.print("len = {d} > idx + pos = {d}\n", .{ slice.len, idx + pos });
                 const rpos: c_int = @intCast(pos);
                 slice[idx + pos] = try SqliteVal.from_stmt_col(stmt.stmt, rpos, allocator);
             }
-            idx += rlen;
+            idx += column_count;
         }
 
         if (slice.len > idx) {

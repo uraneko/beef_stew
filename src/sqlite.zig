@@ -347,6 +347,10 @@ pub const Statement = struct {
         }
     }
 
+    pub fn count_columns(self: *@This()) c_int {
+        return c.sqlite3_column_count(self.stmt);
+    }
+
     pub fn bind(self: *Statement, db: ?*c.sqlite3) !void {
         const c_idx: c_int = @intCast(self.*.idx + 1);
         const bind_op = switch (self.*.bindings.?[self.*.idx]) {
